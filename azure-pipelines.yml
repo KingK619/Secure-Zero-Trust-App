@@ -85,7 +85,7 @@ stages:
     steps:
 
     # ---------------------------------------------
-    # Login + Check RG + Import if already exists
+    # Check RG + Import if needed
     # ---------------------------------------------
     - task: AzureCLI@2
       displayName: Detect Existing RG and Import
@@ -101,22 +101,30 @@ stages:
           cd $(terraformDir)
           terraform init
 
-          $state = terraform state list 2>$null
+          $state = ""
+
+          try {
+              $state = terraform state list 2>$null
+          }
+          catch {
+              Write-Host "No Terraform state found. Fresh deployment."
+          }
 
           if ($exists -eq "true") {
 
-            if ($state -match "azurerm_resource_group.rg") {
-              Write-Host "RG already present in Terraform state. No import needed."
-            }
-            else {
-              Write-Host "Importing existing Resource Group into Terraform state..."
+              if ($state -match "azurerm_resource_group.rg") {
+                  Write-Host "RG already present in Terraform state. No import needed."
+              }
+              else {
+                  Write-Host "Importing existing Resource Group into Terraform state..."
 
-              terraform import azurerm_resource_group.rg `
-              /subscriptions/$(AZURE_SUBSCRIPTION_ID)/resourceGroups/$(resourceGroupName)
-            }
+                  terraform import azurerm_resource_group.rg `
+                  /subscriptions/$(AZURE_SUBSCRIPTION_ID)/resourceGroups/$(resourceGroupName)
+              }
+
           }
           else {
-            Write-Host "Resource Group does not exist. Terraform will create it."
+              Write-Host "Resource Group does not exist. Terraform will create it."
           }
 
     # ---------------------------------------------
