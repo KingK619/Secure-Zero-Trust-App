@@ -7,6 +7,7 @@ pool:
 variables:
   terraformDir: terraform
   resourceGroupName: zero-trust-rg
+  WEBAPP_NAME: secureflaskapp54321
 
 stages:
 
