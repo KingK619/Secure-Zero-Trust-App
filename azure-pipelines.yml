@@ -9,7 +9,7 @@ variables:
   resourceGroupName: zero-trust-rg
   WEBAPP_NAME: secureflaskapp54321
   AZURE_SUBSCRIPTION_ID: 7d7be2b8-19fe-41d0-bad0-2d1d26a9c1c2
-  TF_VAR_db_password = YourStrongPassword123!
+  TF_VAR_db_password : YourStrongPassword123!
 
 stages:
 
