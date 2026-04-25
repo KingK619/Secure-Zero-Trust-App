@@ -6,9 +6,13 @@ pool:
 
 variables:
   terraformDir: terraform
+  resourceGroupName: zero-trust-rg
 
 stages:
 
+# ==========================================
+# STAGE 1 - VALIDATE
+# ==========================================
 - stage: Validate
   jobs:
   - job: ValidateJob
@@ -18,7 +22,11 @@ stages:
         terraform init
         terraform fmt -check
         terraform validate
+      displayName: Terraform Validate
 
+# ==========================================
+# STAGE 2 - PLAN
+# ==========================================
 - stage: Plan
   dependsOn: Validate
   jobs:
@@ -30,7 +38,11 @@ stages:
         terraform plan
       env:
         TF_VAR_db_password: $(TF_VAR_db_password)
+      displayName: Terraform Plan
 
+# ==========================================
+# STAGE 3 - APPROVAL
+# ==========================================
 - stage: Approval
   dependsOn: Plan
   jobs:
@@ -39,29 +51,60 @@ stages:
     steps:
     - task: ManualValidation@0
       inputs:
-        instructions: 'Approve Terraform apply'
+        instructions: 'Review Terraform plan and approve apply.'
+      displayName: Manual Approval
 
+# ==========================================
+# STAGE 4 - APPLY
+# ==========================================
 - stage: Apply
   dependsOn: Approval
   jobs:
   - job: ApplyJob
     steps:
+
+    # Check if RG exists. If yes, import into Terraform state.
+    - script: |
+        echo Checking if Resource Group exists...
+
+        az group show --name $(resourceGroupName)
+
+        IF %ERRORLEVEL% EQU 0 (
+          echo Resource Group exists. Importing into Terraform state...
+
+          cd $(terraformDir)
+
+          terraform init
+
+          terraform import azurerm_resource_group.rg /subscriptions/$(AZURE_SUBSCRIPTION_ID)/resourceGroups/$(resourceGroupName)
+        ) ELSE (
+          echo Resource Group does not exist. Terraform will create it.
+        )
+      displayName: Detect / Import Existing RG
+
     - script: |
         cd $(terraformDir)
         terraform init
         terraform apply -auto-approve
       env:
         TF_VAR_db_password: $(TF_VAR_db_password)
+      displayName: Terraform Apply
 
+# ==========================================
+# STAGE 5 - BUILD APP
+# ==========================================
 - stage: Build
   dependsOn: Apply
   jobs:
   - job: BuildJob
     steps:
+
     - script: |
         python -m venv venv
         call venv\Scripts\activate
+        python -m pip install --upgrade pip
         pip install -r requirements.txt
+      displayName: Install Dependencies
 
     - task: ArchiveFiles@2
       inputs:
@@ -69,15 +112,22 @@ stages:
         includeRootFolder: false
         archiveType: zip
         archiveFile: $(Build.ArtifactStagingDirectory)/app.zip
+        replaceExistingArchive: true
+      displayName: Archive App
 
     - publish: $(Build.ArtifactStagingDirectory)/app.zip
       artifact: drop
+      displayName: Publish Artifact
 
+# ==========================================
+# STAGE 6 - DEPLOY APP
+# ==========================================
 - stage: Deploy
   dependsOn: Build
   jobs:
   - job: DeployJob
     steps:
+
     - download: current
       artifact: drop
 
@@ -88,3 +138,4 @@ stages:
         appName: $(WEBAPP_NAME)
         package: $(Pipeline.Workspace)/drop/app.zip
         startUpCommand: gunicorn --bind=0.0.0.0:8000 app:app
+      displayName: Deploy to Azure App Service
