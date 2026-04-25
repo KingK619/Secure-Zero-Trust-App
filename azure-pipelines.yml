@@ -5,142 +5,15 @@ pool:
   name: Default
 
 variables:
-  terraformDir: terraform
-  resourceGroupName: zero-trust-rg
   WEBAPP_NAME: secureflaskapp54321
-  AZURE_SUBSCRIPTION_ID: 7d7be2b8-19fe-41d0-bad0-2d1d26a9c1c2
-  TF_VAR_db_password : password@1
 
 stages:
 
 # ==========================================================
-# STAGE 1 - VALIDATE TERRAFORM
-# ==========================================================
-- stage: Validate
-  displayName: Terraform Validate
-
-  jobs:
-  - job: ValidateJob
-    displayName: Validate Infrastructure Code
-
-    steps:
-    - script: |
-        cd $(terraformDir)
-        terraform init
-        terraform fmt -check
-        terraform validate
-      displayName: Run terraform validate
-
-
-# ==========================================================
-# STAGE 2 - PLAN
-# ==========================================================
-- stage: Plan
-  displayName: Terraform Plan
-  dependsOn: Validate
-
-  jobs:
-  - job: PlanJob
-    displayName: Plan Infrastructure Changes
-
-    steps:
-    - script: |
-        cd $(terraformDir)
-        terraform init
-        terraform plan -out=tfplan
-      env:
-        TF_VAR_db_password: $(TF_VAR_db_password)
-      displayName: Run terraform plan
-
-
-# ==========================================================
-# STAGE 3 - MANUAL APPROVAL
-# ==========================================================
-- stage: Approval
-  displayName: Manual Approval
-  dependsOn: Plan
-
-  jobs:
-  - job: ApprovalJob
-    displayName: Await Deployment Approval
-    pool: server
-
-    steps:
-    - task: ManualValidation@0
-      timeoutInMinutes: 1440
-      inputs:
-        notifyUsers: ''
-        instructions: 'Review Terraform plan and approve deployment.'
-        onTimeout: reject
-      displayName: Manual Approval Gate
-
-
-# ==========================================================
-# STAGE 4 - APPLY
-# ==========================================================
-- stage: Apply
-  displayName: Terraform Apply
-  dependsOn: Approval
-
-  jobs:
-  - job: ApplyJob
-    displayName: Provision Infrastructure
-
-    steps:
-
-    # ------------------------------------------------------
-    # Detect existing RG and import if needed
-    # ------------------------------------------------------
-    - task: AzureCLI@2
-      displayName: Detect Existing RG and Import
-      inputs:
-        azureSubscription: AzureConnection
-        scriptType: ps
-        scriptLocation: inlineScript
-        inlineScript: |
-
-          $ErrorActionPreference = "Continue"
-
-          $exists = az group exists --name "$(resourceGroupName)"
-          Write-Host "Resource Group Exists: $exists"
-
-          cd $(terraformDir)
-          terraform init
-
-          if ($exists -eq "true") {
-
-            Write-Host "Importing existing Resource Group into Terraform state..."
-
-            terraform import azurerm_resource_group.rg `
-            /subscriptions/$(AZURE_SUBSCRIPTION_ID)/resourceGroups/$(resourceGroupName)
-
-          }
-          else {
-
-            Write-Host "Resource Group does not exist. Terraform will create it."
-
-          }
-
-          exit 0
-
-
-    # ------------------------------------------------------
-    # Terraform Apply
-    # ------------------------------------------------------
-    - script: |
-        cd $(terraformDir)
-        terraform apply -auto-approve
-      env:
-        TF_VAR_db_password: $(TF_VAR_db_password)
-      displayName: Run terraform apply
-
-
-# ==========================================================
-# STAGE 5 - BUILD APPLICATION
+# STAGE 1 - BUILD APPLICATION
 # ==========================================================
 - stage: Build
   displayName: Build Flask App
-  dependsOn: Apply
 
   jobs:
   - job: BuildJob
@@ -170,7 +43,7 @@ stages:
 
 
 # ==========================================================
-# STAGE 6 - DEPLOY APPLICATION
+# STAGE 2 - DEPLOY APPLICATION
 # ==========================================================
 - stage: Deploy
   displayName: Deploy to Azure App Service
@@ -196,7 +69,7 @@ stages:
 
 
 # ==========================================================
-# STAGE 7 - HEALTH CHECK
+# STAGE 3 - HEALTH CHECK
 # ==========================================================
 - stage: Test
   displayName: Smoke Test
