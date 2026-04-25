@@ -18,7 +18,7 @@ stages:
 
   jobs:
   - job: ValidateJob
-    displayName: Validate IaC
+    displayName: Validate Infrastructure Code
 
     steps:
     - script: |
@@ -38,7 +38,7 @@ stages:
 
   jobs:
   - job: PlanJob
-    displayName: Plan Infrastructure
+    displayName: Plan Infrastructure Changes
 
     steps:
     - script: |
@@ -51,7 +51,7 @@ stages:
 
 
 # ==========================================================
-# STAGE 3 - APPROVAL
+# STAGE 3 - MANUAL APPROVAL
 # ==========================================================
 - stage: Approval
   displayName: Manual Approval
@@ -59,6 +59,7 @@ stages:
 
   jobs:
   - job: ApprovalJob
+    displayName: Await Deployment Approval
     pool: server
 
     steps:
@@ -68,7 +69,7 @@ stages:
         notifyUsers: ''
         instructions: 'Review Terraform plan and approve deployment.'
         onTimeout: reject
-      displayName: Await Approval
+      displayName: Manual Approval Gate
 
 
 # ==========================================================
@@ -80,13 +81,13 @@ stages:
 
   jobs:
   - job: ApplyJob
-    displayName: Apply Infrastructure
+    displayName: Provision Infrastructure
 
     steps:
 
-    # ---------------------------------------------
-    # Check RG + Import if needed
-    # ---------------------------------------------
+    # ------------------------------------------------------
+    # Detect existing RG and import if needed
+    # ------------------------------------------------------
     - task: AzureCLI@2
       displayName: Detect Existing RG and Import
       inputs:
@@ -95,41 +96,34 @@ stages:
         scriptLocation: inlineScript
         inlineScript: |
 
+          $ErrorActionPreference = "Continue"
+
           $exists = az group exists --name "$(resourceGroupName)"
           Write-Host "Resource Group Exists: $exists"
 
           cd $(terraformDir)
           terraform init
 
-          $state = ""
-
-          try {
-              $state = terraform state list 2>$null
-          }
-          catch {
-              Write-Host "No Terraform state found. Fresh deployment."
-          }
-
           if ($exists -eq "true") {
 
-              if ($state -match "azurerm_resource_group.rg") {
-                  Write-Host "RG already present in Terraform state. No import needed."
-              }
-              else {
-                  Write-Host "Importing existing Resource Group into Terraform state..."
+            Write-Host "Importing existing Resource Group into Terraform state..."
 
-                  terraform import azurerm_resource_group.rg `
-                  /subscriptions/$(AZURE_SUBSCRIPTION_ID)/resourceGroups/$(resourceGroupName)
-              }
+            terraform import azurerm_resource_group.rg `
+            /subscriptions/$(AZURE_SUBSCRIPTION_ID)/resourceGroups/$(resourceGroupName)
 
           }
           else {
-              Write-Host "Resource Group does not exist. Terraform will create it."
+
+            Write-Host "Resource Group does not exist. Terraform will create it."
+
           }
 
-    # ---------------------------------------------
+          exit 0
+
+
+    # ------------------------------------------------------
     # Terraform Apply
-    # ---------------------------------------------
+    # ------------------------------------------------------
     - script: |
         cd $(terraformDir)
         terraform apply -auto-approve
@@ -139,15 +133,15 @@ stages:
 
 
 # ==========================================================
-# STAGE 5 - BUILD FLASK APP
+# STAGE 5 - BUILD APPLICATION
 # ==========================================================
 - stage: Build
-  displayName: Build Application
+  displayName: Build Flask App
   dependsOn: Apply
 
   jobs:
   - job: BuildJob
-    displayName: Package Flask App
+    displayName: Package Application
 
     steps:
 
@@ -159,7 +153,7 @@ stages:
       displayName: Install Dependencies
 
     - task: ArchiveFiles@2
-      displayName: Create Deployment ZIP
+      displayName: Create ZIP Artifact
       inputs:
         rootFolderOrFile: .
         includeRootFolder: false
@@ -169,19 +163,19 @@ stages:
 
     - publish: $(Build.ArtifactStagingDirectory)/app.zip
       artifact: drop
-      displayName: Publish Artifact
+      displayName: Publish Build Artifact
 
 
 # ==========================================================
-# STAGE 6 - DEPLOY APP SERVICE
+# STAGE 6 - DEPLOY APPLICATION
 # ==========================================================
 - stage: Deploy
-  displayName: Deploy Application
+  displayName: Deploy to Azure App Service
   dependsOn: Build
 
   jobs:
   - job: DeployJob
-    displayName: Deploy to Azure App Service
+    displayName: Release Web App
 
     steps:
 
@@ -189,7 +183,7 @@ stages:
       artifact: drop
 
     - task: AzureWebApp@1
-      displayName: Deploy ZIP to Web App
+      displayName: Deploy ZIP Package
       inputs:
         azureSubscription: AzureConnection
         appType: webAppLinux
@@ -207,7 +201,7 @@ stages:
 
   jobs:
   - job: TestJob
-    displayName: Verify Deployment
+    displayName: Validate Live App
 
     steps:
 
