@@ -8,4 +8,5 @@ variable "resource_group_name" {
 
 variable "db_password" {
   sensitive = true
+  default = "password@1"
 }
