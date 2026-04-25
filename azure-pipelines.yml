@@ -1,0 +1,90 @@
+trigger:
+- main
+
+pool:
+  name: Default
+
+variables:
+  terraformDir: terraform
+
+stages:
+
+- stage: Validate
+  jobs:
+  - job: ValidateJob
+    steps:
+    - script: |
+        cd $(terraformDir)
+        terraform init
+        terraform fmt -check
+        terraform validate
+
+- stage: Plan
+  dependsOn: Validate
+  jobs:
+  - job: PlanJob
+    steps:
+    - script: |
+        cd $(terraformDir)
+        terraform init
+        terraform plan
+      env:
+        TF_VAR_db_password: $(TF_VAR_db_password)
+
+- stage: Approval
+  dependsOn: Plan
+  jobs:
+  - job: ApprovalJob
+    pool: server
+    steps:
+    - task: ManualValidation@0
+      inputs:
+        instructions: 'Approve Terraform apply'
+
+- stage: Apply
+  dependsOn: Approval
+  jobs:
+  - job: ApplyJob
+    steps:
+    - script: |
+        cd $(terraformDir)
+        terraform init
+        terraform apply -auto-approve
+      env:
+        TF_VAR_db_password: $(TF_VAR_db_password)
+
+- stage: Build
+  dependsOn: Apply
+  jobs:
+  - job: BuildJob
+    steps:
+    - script: |
+        python -m venv venv
+        call venv\Scripts\activate
+        pip install -r requirements.txt
+
+    - task: ArchiveFiles@2
+      inputs:
+        rootFolderOrFile: .
+        includeRootFolder: false
+        archiveType: zip
+        archiveFile: $(Build.ArtifactStagingDirectory)/app.zip
+
+    - publish: $(Build.ArtifactStagingDirectory)/app.zip
+      artifact: drop
+
+- stage: Deploy
+  dependsOn: Build
+  jobs:
+  - job: DeployJob
+    steps:
+    - download: current
+      artifact: drop
+
+    - task: AzureWebApp@1
+      inputs:
+        azureSubscription: AzureConnection
+        appType: webAppLinux
+        appName: $(WEBAPP_NAME)
+        package: $(Pipeline.Workspace)/drop/app.zip
+        startUpCommand: gunicorn --bind=0.0.0.0:8000 app:app
