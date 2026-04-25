@@ -10,93 +10,137 @@ variables:
 
 stages:
 
-# ==========================================
-# STAGE 1 - VALIDATE
-# ==========================================
+# ==========================================================
+# STAGE 1 - VALIDATE TERRAFORM
+# ==========================================================
 - stage: Validate
+  displayName: Terraform Validate
+
   jobs:
   - job: ValidateJob
+    displayName: Validate IaC
+
     steps:
     - script: |
         cd $(terraformDir)
         terraform init
         terraform fmt -check
         terraform validate
-      displayName: Terraform Validate
+      displayName: Run terraform validate
 
-# ==========================================
+
+# ==========================================================
 # STAGE 2 - PLAN
-# ==========================================
+# ==========================================================
 - stage: Plan
+  displayName: Terraform Plan
   dependsOn: Validate
+
   jobs:
   - job: PlanJob
+    displayName: Plan Infrastructure
+
     steps:
     - script: |
         cd $(terraformDir)
         terraform init
-        terraform plan
+        terraform plan -out=tfplan
       env:
         TF_VAR_db_password: $(TF_VAR_db_password)
-      displayName: Terraform Plan
+      displayName: Run terraform plan
 
-# ==========================================
+
+# ==========================================================
 # STAGE 3 - APPROVAL
-# ==========================================
+# ==========================================================
 - stage: Approval
+  displayName: Manual Approval
   dependsOn: Plan
+
   jobs:
   - job: ApprovalJob
     pool: server
+
     steps:
     - task: ManualValidation@0
+      timeoutInMinutes: 1440
       inputs:
-        instructions: 'Review Terraform plan and approve apply.'
-      displayName: Manual Approval
+        notifyUsers: ''
+        instructions: 'Review Terraform plan and approve deployment.'
+        onTimeout: reject
+      displayName: Await Approval
 
-# ==========================================
+
+# ==========================================================
 # STAGE 4 - APPLY
-# ==========================================
+# ==========================================================
 - stage: Apply
+  displayName: Terraform Apply
   dependsOn: Approval
+
   jobs:
   - job: ApplyJob
+    displayName: Apply Infrastructure
+
     steps:
 
-    # Check if RG exists. If yes, import into Terraform state.
-    - script: |
-        echo Checking if Resource Group exists...
+    # ---------------------------------------------
+    # Login + Check RG + Import if already exists
+    # ---------------------------------------------
+    - task: AzureCLI@2
+      displayName: Detect Existing RG and Import
+      inputs:
+        azureSubscription: AzureConnection
+        scriptType: ps
+        scriptLocation: inlineScript
+        inlineScript: |
 
-        az group show --name $(resourceGroupName)
-
-        IF %ERRORLEVEL% EQU 0 (
-          echo Resource Group exists. Importing into Terraform state...
+          $exists = az group exists --name "$(resourceGroupName)"
+          Write-Host "Resource Group Exists: $exists"
 
           cd $(terraformDir)
-
           terraform init
 
-          terraform import azurerm_resource_group.rg /subscriptions/$(AZURE_SUBSCRIPTION_ID)/resourceGroups/$(resourceGroupName)
-        ) ELSE (
-          echo Resource Group does not exist. Terraform will create it.
-        )
-      displayName: Detect / Import Existing RG
+          $state = terraform state list 2>$null
 
+          if ($exists -eq "true") {
+
+            if ($state -match "azurerm_resource_group.rg") {
+              Write-Host "RG already present in Terraform state. No import needed."
+            }
+            else {
+              Write-Host "Importing existing Resource Group into Terraform state..."
+
+              terraform import azurerm_resource_group.rg `
+              /subscriptions/$(AZURE_SUBSCRIPTION_ID)/resourceGroups/$(resourceGroupName)
+            }
+          }
+          else {
+            Write-Host "Resource Group does not exist. Terraform will create it."
+          }
+
+    # ---------------------------------------------
+    # Terraform Apply
+    # ---------------------------------------------
     - script: |
         cd $(terraformDir)
-        terraform init
         terraform apply -auto-approve
       env:
         TF_VAR_db_password: $(TF_VAR_db_password)
-      displayName: Terraform Apply
+      displayName: Run terraform apply
 
-# ==========================================
-# STAGE 5 - BUILD APP
-# ==========================================
+
+# ==========================================================
+# STAGE 5 - BUILD FLASK APP
+# ==========================================================
 - stage: Build
+  displayName: Build Application
   dependsOn: Apply
+
   jobs:
   - job: BuildJob
+    displayName: Package Flask App
+
     steps:
 
     - script: |
@@ -107,35 +151,75 @@ stages:
       displayName: Install Dependencies
 
     - task: ArchiveFiles@2
+      displayName: Create Deployment ZIP
       inputs:
         rootFolderOrFile: .
         includeRootFolder: false
         archiveType: zip
         archiveFile: $(Build.ArtifactStagingDirectory)/app.zip
         replaceExistingArchive: true
-      displayName: Archive App
 
     - publish: $(Build.ArtifactStagingDirectory)/app.zip
       artifact: drop
       displayName: Publish Artifact
 
-# ==========================================
-# STAGE 6 - DEPLOY APP
-# ==========================================
+
+# ==========================================================
+# STAGE 6 - DEPLOY APP SERVICE
+# ==========================================================
 - stage: Deploy
+  displayName: Deploy Application
   dependsOn: Build
+
   jobs:
   - job: DeployJob
+    displayName: Deploy to Azure App Service
+
     steps:
 
     - download: current
       artifact: drop
 
     - task: AzureWebApp@1
+      displayName: Deploy ZIP to Web App
       inputs:
         azureSubscription: AzureConnection
         appType: webAppLinux
         appName: $(WEBAPP_NAME)
         package: $(Pipeline.Workspace)/drop/app.zip
         startUpCommand: gunicorn --bind=0.0.0.0:8000 app:app
-      displayName: Deploy to Azure App Service
+
+
+# ==========================================================
+# STAGE 7 - HEALTH CHECK
+# ==========================================================
+- stage: Test
+  displayName: Smoke Test
+  dependsOn: Deploy
+
+  jobs:
+  - job: TestJob
+    displayName: Verify Deployment
+
+    steps:
+
+    - task: AzureCLI@2
+      displayName: Test /health Endpoint
+      inputs:
+        azureSubscription: AzureConnection
+        scriptType: ps
+        scriptLocation: inlineScript
+        inlineScript: |
+
+          $url = "https://$(WEBAPP_NAME).azurewebsites.net/health"
+
+          Write-Host "Checking $url"
+
+          try {
+            $response = Invoke-WebRequest -Uri $url -UseBasicParsing
+            Write-Host $response.Content
+          }
+          catch {
+            Write-Error "Health check failed."
+            exit 1
+          }
