@@ -1,7 +1,9 @@
 from flask import Flask, jsonify
 import os
 import psycopg2
-
+import logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 try:
     from dotenv import load_dotenv
     load_dotenv()
@@ -13,10 +15,12 @@ app = Flask(__name__)
 
 @app.route("/")
 def home():
+    logger.info("Home endpoint hit")
     return "Secure Azure Zero Trust Deployment Successful"
 
 @app.route("/health")
 def health():
+    logger.info("Health check called")
     try:
         conn = psycopg2.connect(
             host=os.getenv("DB_HOST"),
