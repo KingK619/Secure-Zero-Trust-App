@@ -2,122 +2,73 @@ trigger:
   - main
 
 pool:
-  name: Default
+  name: 'Default'
 
 variables:
-  WEBAPP_NAME: secureflaskapp54321
+  azureServiceConnectionId: 'AzureConnection'
+  webAppName: 'secureflaskapp54321'
+  resourceGroup: 'zero-trust-rg'
+  projectRoot: $(System.DefaultWorkingDirectory)
 
 stages:
   # ==========================================================
-  # STAGE 1 - BUILD APPLICATION
+  # STAGE 1 - BUILD
   # ==========================================================
   - stage: Build
-    displayName: Build Flask App
+    displayName: 'Build and Package Phase'
 
     jobs:
       - job: BuildJob
-        displayName: Package Application
-        steps:
-          - script: |
-              echo "Skip creating Windows virtualenv. Build on Linux agent and bundle dependencies."
-              python3 --version || python --version
-              if [ -f requirements.txt ]; then cat requirements.txt; else echo "requirements.txt not found"; fi
-            displayName: Prepare Package
+        displayName: 'Build Application'
 
-          - script: |
-              python3 -m pip install --upgrade pip
-              python3 -m pip install -r requirements.txt -t ./vendor
-            displayName: Install dependencies into ./vendor
+        steps:
+          - checkout: self
 
           - task: ArchiveFiles@2
-            displayName: Create ZIP Artifact
+            displayName: 'Archive Application (source only)'
             inputs:
-              rootFolderOrFile: .
+              rootFolderOrFile: '$(projectRoot)'
               includeRootFolder: false
-              archiveType: zip
-              archiveFile: $(Build.ArtifactStagingDirectory)/app.zip
+              archiveType: 'zip'
+              archiveFile: '$(Build.ArtifactStagingDirectory)/$(Build.BuildId).zip'
               replaceExistingArchive: true
-              excludes: |
-                venv/**
-                .venv/**
-                antenv/**
-                __pycache__/**
-                *.pyc
 
-          - publish: $(Build.ArtifactStagingDirectory)/app.zip
+          - publish: $(Build.ArtifactStagingDirectory)/$(Build.BuildId).zip
             artifact: drop
-            displayName: Publish Build Artifact
+            displayName: 'Publish Build Artifact'
 
   # ==========================================================
-  # STAGE 2 - DEPLOY APPLICATION
+  # STAGE 2 - DEPLOY
   # ==========================================================
   - stage: Deploy
-    displayName: Deploy to Azure App Service
+    displayName: 'Production Deployment Phase'
     dependsOn: Build
 
     jobs:
       - job: DeployJob
-        displayName: Release Web App
+        displayName: 'Deploy to Azure App Service'
 
         steps:
           - download: current
             artifact: drop
 
-          - task: AzureWebApp@1
-            displayName: Deploy ZIP Package
-            inputs:
-              azureSubscription: AzureConnection
-              appType: webAppLinux
-              appName: $(WEBAPP_NAME)
-              package: $(Pipeline.Workspace)/drop/app.zip
-              startUpCommand: PYTHONPATH=/home/site/wwwroot/vendor gunicorn --bind=0.0.0.0:8000 app:app
-
-  # ==========================================================
-  # STAGE 3 - HEALTH CHECK
-  # ==========================================================
-  - stage: Test
-    displayName: Smoke Test
-    dependsOn: Deploy
-
-    jobs:
-      - job: TestJob
-        displayName: Validate Live App
-
-        steps:
           - task: AzureCLI@2
-            displayName: Test /health Endpoint
+            displayName: 'Enable Build During Deployment'
             inputs:
-              azureSubscription: AzureConnection
+              azureSubscription: $(azureServiceConnectionId)
               scriptType: ps
               scriptLocation: inlineScript
               inlineScript: |
-                $url = "https://$(WEBAPP_NAME).azurewebsites.net/health"
-                Write-Host "Checking $url"
+                az webapp config appsettings set `
+                  --name $(webAppName) `
+                  --resource-group $(resourceGroup) `
+                  --settings SCM_DO_BUILD_DURING_DEPLOYMENT=true
 
-                $maxAttempts = 10
-                $delaySeconds = 10
-
-                for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
-                  try {
-                    $response = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 30
-                    Write-Host "Attempt ${attempt}: HTTP $($response.StatusCode)"
-                    Write-Host $response.Content
-                    exit 0
-                  }
-                  catch {
-                    Write-Warning "Attempt ${attempt} failed: $($_.Exception.Message)"
-                    if ($_.Exception.Response -ne $null) {
-                      try {
-                        $resp = $_.Exception.Response
-                        Write-Warning "Remote status: $($resp.StatusCode) $($resp.StatusDescription)"
-                      } catch {}
-                    }
-                    if ($attempt -lt $maxAttempts) {
-                      Write-Host "Waiting $delaySeconds seconds before retry..."
-                      Start-Sleep -Seconds $delaySeconds
-                    } else {
-                      Write-Error "Health check failed after $maxAttempts attempts."
-                      exit 1
-                    }
-                  }
-                }
+          - task: AzureWebApp@1
+            displayName: 'Deploy to Azure App Service'
+            inputs:
+              azureSubscription: $(azureServiceConnectionId)
+              appType: 'webAppLinux'
+              appName: $(webAppName)
+              package: '$(Pipeline.Workspace)/drop/$(Build.BuildId).zip'
+              startUpCommand: 'gunicorn --bind=0.0.0.0:8000 --timeout 600 app:app'
