@@ -1,9 +1,13 @@
 from flask import Flask, jsonify
 import os
-from dotenv import load_dotenv
 import psycopg2
 
-load_dotenv()
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    # python-dotenv not available in the runtime (OK in App Service where env vars are set)
+    pass
 
 app = Flask(__name__)
 

@@ -25,6 +25,7 @@ resource "azurerm_linux_web_app" "app" {
 
   app_settings = {
     WEBSITES_PORT = "8000"
+    SCM_DO_BUILD_DURING_DEPLOYMENT = "true"
   }
 }
 
