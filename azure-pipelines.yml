@@ -1,5 +1,5 @@
 trigger:
-  - none
+  - main
 
 pool:
   name: Default
@@ -91,7 +91,7 @@ stages:
                 for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
                   try {
                     $response = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 30
-                    Write-Host "Attempt $attempt: HTTP $($response.StatusCode)"
+                    Write-Host "Attempt ${attempt}: HTTP $($response.StatusCode)"
                     Write-Host $response.Content
                     exit 0
                   }
