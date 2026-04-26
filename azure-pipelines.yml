@@ -1,5 +1,5 @@
 trigger:
-- main
+  - main
 
 pool:
   name: Default
@@ -8,96 +8,107 @@ variables:
   WEBAPP_NAME: secureflaskapp54321
 
 stages:
+  # ==========================================================
+  # STAGE 1 - BUILD APPLICATION
+  # ==========================================================
+  - stage: Build
+    displayName: Build Flask App
 
-# ==========================================================
-# STAGE 1 - BUILD APPLICATION
-# ==========================================================
-- stage: Build
-  displayName: Build Flask App
+    jobs:
+      - job: BuildJob
+        displayName: Package Application
 
-  jobs:
-  - job: BuildJob
-    displayName: Package Application
+        steps:
+          - script: |
+              python -m venv venv
+              call venv\Scripts\activate
+              python -m pip install --upgrade pip
+              pip install -r requirements.txt
+            displayName: Install Dependencies
 
-    steps:
+          - task: ArchiveFiles@2
+            displayName: Create ZIP Artifact
+            inputs:
+              rootFolderOrFile: .
+              includeRootFolder: false
+              archiveType: zip
+              archiveFile: $(Build.ArtifactStagingDirectory)/app.zip
+              replaceExistingArchive: true
 
-    - script: |
-        python -m venv venv
-        call venv\Scripts\activate
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-      displayName: Install Dependencies
+          - publish: $(Build.ArtifactStagingDirectory)/app.zip
+            artifact: drop
+            displayName: Publish Build Artifact
 
-    - task: ArchiveFiles@2
-      displayName: Create ZIP Artifact
-      inputs:
-        rootFolderOrFile: .
-        includeRootFolder: false
-        archiveType: zip
-        archiveFile: $(Build.ArtifactStagingDirectory)/app.zip
-        replaceExistingArchive: true
+  # ==========================================================
+  # STAGE 2 - DEPLOY APPLICATION
+  # ==========================================================
+  - stage: Deploy
+    displayName: Deploy to Azure App Service
+    dependsOn: Build
 
-    - publish: $(Build.ArtifactStagingDirectory)/app.zip
-      artifact: drop
-      displayName: Publish Build Artifact
+    jobs:
+      - job: DeployJob
+        displayName: Release Web App
 
+        steps:
+          - download: current
+            artifact: drop
 
-# ==========================================================
-# STAGE 2 - DEPLOY APPLICATION
-# ==========================================================
-- stage: Deploy
-  displayName: Deploy to Azure App Service
-  dependsOn: Build
+          - task: AzureWebApp@1
+            displayName: Deploy ZIP Package
+            inputs:
+              azureSubscription: AzureConnection
+              appType: webAppLinux
+              appName: $(WEBAPP_NAME)
+              package: $(Pipeline.Workspace)/drop/app.zip
+              startUpCommand: gunicorn --bind=0.0.0.0:8000 app:app
 
-  jobs:
-  - job: DeployJob
-    displayName: Release Web App
+  # ==========================================================
+  # STAGE 3 - HEALTH CHECK
+  # ==========================================================
+  - stage: Test
+    displayName: Smoke Test
+    dependsOn: Deploy
 
-    steps:
+    jobs:
+      - job: TestJob
+        displayName: Validate Live App
 
-    - download: current
-      artifact: drop
+        steps:
+          - task: AzureCLI@2
+            displayName: Test /health Endpoint
+            inputs:
+              azureSubscription: AzureConnection
+              scriptType: ps
+              scriptLocation: inlineScript
+              inlineScript: |
+                $url = "https://$(WEBAPP_NAME).azurewebsites.net/health"
+                Write-Host "Checking $url"
 
-    - task: AzureWebApp@1
-      displayName: Deploy ZIP Package
-      inputs:
-        azureSubscription: AzureConnection
-        appType: webAppLinux
-        appName: $(WEBAPP_NAME)
-        package: $(Pipeline.Workspace)/drop/app.zip
-        startUpCommand: gunicorn --bind=0.0.0.0:8000 app:app
+                $maxAttempts = 10
+                $delaySeconds = 10
 
-
-# ==========================================================
-# STAGE 3 - HEALTH CHECK
-# ==========================================================
-- stage: Test
-  displayName: Smoke Test
-  dependsOn: Deploy
-
-  jobs:
-  - job: TestJob
-    displayName: Validate Live App
-
-    steps:
-
-    - task: AzureCLI@2
-      displayName: Test /health Endpoint
-      inputs:
-        azureSubscription: AzureConnection
-        scriptType: ps
-        scriptLocation: inlineScript
-        inlineScript: |
-
-          $url = "https://$(WEBAPP_NAME).azurewebsites.net/health"
-
-          Write-Host "Checking $url"
-
-          try {
-            $response = Invoke-WebRequest -Uri $url -UseBasicParsing
-            Write-Host $response.Content
-          }
-          catch {
-            Write-Error "Health check failed."
-            exit 1
-          }
+                for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+                  try {
+                    $response = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 30
+                    Write-Host "Attempt $attempt: HTTP $($response.StatusCode)"
+                    Write-Host $response.Content
+                    exit 0
+                  }
+                  catch {
+                    Write-Warning "Attempt $attempt failed: $($_.Exception.Message)"
+                    if ($_.Exception.Response -ne $null) {
+                      try {
+                        $resp = $_.Exception.Response
+                        Write-Warning "Remote status: $($resp.StatusCode) $($resp.StatusDescription)"
+                      } catch {}
+                    }
+                    if ($attempt -lt $maxAttempts) {
+                      Write-Host "Waiting $delaySeconds seconds before retry..."
+                      Start-Sleep -Seconds $delaySeconds
+                    } else {
+                      Write-Error "Health check failed after $maxAttempts attempts."
+                      exit 1
+                    }
+                  }
+                }
