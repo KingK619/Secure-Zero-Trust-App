@@ -17,9 +17,6 @@ stages:
     jobs:
       - job: BuildJob
         displayName: Package Application
-        pool:
-          vmImage: 'default'
-
         steps:
           - script: |
               echo "Skip creating Windows virtualenv. Build on Linux agent and bundle dependencies."
