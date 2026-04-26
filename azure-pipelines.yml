@@ -1,5 +1,5 @@
 trigger:
-  - main
+  - none
 
 pool:
   name: Default
@@ -96,7 +96,7 @@ stages:
                     exit 0
                   }
                   catch {
-                    Write-Warning "Attempt $attempt failed: $($_.Exception.Message)"
+                    Write-Warning "Attempt ${attempt} failed: $($_.Exception.Message)"
                     if ($_.Exception.Response -ne $null) {
                       try {
                         $resp = $_.Exception.Response
