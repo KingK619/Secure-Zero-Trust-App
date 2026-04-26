@@ -18,7 +18,7 @@ stages:
       - job: BuildJob
         displayName: Package Application
         pool:
-          vmImage: 'ubuntu-latest'
+          vmImage: 'default'
 
         steps:
           - script: |
